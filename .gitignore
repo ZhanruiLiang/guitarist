@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+.*.sw[pnmo]
+.errors
+*.so
+_*.c
+_*.html
