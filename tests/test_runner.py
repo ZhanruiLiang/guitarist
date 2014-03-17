@@ -15,6 +15,23 @@ class TestRunner(unittest.TestCase):
         r.join()
         assert r.result == 30
 
+    def test_pipe(self):
+        import numpy as np
+        class Runner(runner.Runner):
+            def run(self, progress, n):
+                a = np.zeros(n)
+                return a
+
+            def on_finish(self, result):
+                self.a = result
+
+        n = 1000000
+        r = Runner(n)
+        r.start()
+        r.join()
+        assert len(r.a) == n
+
+
     def test_progress(self):
         class WriteProgressRunner(runner.Runner):
             def run(self, progress):

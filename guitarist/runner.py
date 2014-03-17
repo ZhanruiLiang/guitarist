@@ -47,7 +47,7 @@ class Runner:
         self.progress = Progress()
 
     def start(self):
-        conn_recv, conn_send = Pipe()
+        conn_recv, conn_send = Pipe(False)
         args = (conn_send, self.run, self.progress) + self._args
         self._proc = proc = Process(target=self._run_wrapper, args=args)
         self._thread = thread = Thread(target=self._wait, args=(conn_recv,))
@@ -57,11 +57,12 @@ class Runner:
 
     def _wait(self, result_pipe):
         proc = self._proc
+        result = result_pipe.recv()
         proc.join()
         if proc.exitcode == 0:
-            self.on_finish(result_pipe.recv())
+            self.on_finish(result)
         else:
-            self.on_fail(result_pipe.recv())
+            self.on_fail(result)
 
     def _run_wrapper(self, result_pipe, run, progress, *args):
         try:

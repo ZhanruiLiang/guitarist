@@ -36,7 +36,7 @@ class Hand:
             parent = joint.parent
             # TODO
 
-        self.solver = IKSolver(joint_configs)
+        # self.solver = IKSolver(joint_configs)
 
 
 class Guitar:

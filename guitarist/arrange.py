@@ -285,10 +285,12 @@ class StateCalculator:
 class FingeringArranger:
     """
     frames
+    noteEvents
     time_points
     states
     """
     def __init__(self, sheet):
+        self.sheet = sheet
         self.noteEvents = noteEvents = get_note_events(sheet)
         self.timePoints = timePoints = get_time_points(noteEvents)
         self.frames = get_frames(timePoints, noteEvents)
@@ -305,7 +307,7 @@ class FingeringArranger:
 
     # @profile
     # @timeit
-    def arrange(self):
+    def arrange(self, progress):
         fb = self.fretboard
         timePoints = self.timePoints
         nTimePoints = len(timePoints)
@@ -314,10 +316,12 @@ class FingeringArranger:
         costss = []
         choicess = []
         # statess[i] = states of frames[timePoints[i]]
-        statess = [
-            self.stateCalc.get_matched_states(frames[timePoints[i]])
-            for i in range(nTimePoints)
-        ]
+        progress.info = 'Generate states...'
+        progress.total = nTimePoints
+        statess = []
+        for i in range(nTimePoints):
+            statess.append(self.stateCalc.get_matched_states(frames[timePoints[i]]))
+            progress.current = i + 1
         # with open('debug-dump.txt', 'w') as outfile:
         #     for i, time in enumerate(timePoints):
         #         frame = frames[time]
@@ -333,6 +337,9 @@ class FingeringArranger:
         #         for state in statess[i]:
         #             outfile.write(state.dump() + '\n=================\n')
 
+        progress.info = 'Calculating best fingering...'
+        progress.total = nTimePoints
+
         costCalc = CostCalculator(fb)
         i = 0
         costss.append([0] * len(statess[0]))
@@ -341,9 +348,10 @@ class FingeringArranger:
             costss[0][j] += missed * MISS_PENALTY
         choicess.append([None] * len(statess[0]))
         costCalc.add_frame(frames[timePoints[0]], statess[0], timePoints[0])
+        progress.current = 1
 
         for i in range(1, nTimePoints):
-            print(i, nTimePoints)
+            # print(i, nTimePoints)
             states1 = statess[i - 1]
             states2 = statess[i]
             costs = [None] * len(states2)
@@ -380,7 +388,8 @@ class FingeringArranger:
                 assert choice is not None
                 costs[j2] = minCost
                 choices[j2] = choice
-            print(cnt / tot, cnt, tot)
+            # print(cnt / tot, cnt, tot)
+            progress.current = i + 1
         # dump states
         # for i in range(nTimePoints):
         #     for j2, state2 in enumerate(statess[i]):
@@ -391,13 +400,15 @@ class FingeringArranger:
         # plt.plot([len(x) for x in statess])
         # plt.show()
 
+        progress.info = 'Tracing best solution...'
+        progress.total = nTimePoints
         j = min(range(len(statess[-1])), key=lambda j:costss[-1][j])
         i = nTimePoints - 1
-        print('minCost', costss[-1][j])
+        # print('minCost', costss[-1][j])
         # Trace back the solution
         states = []
         while i >= 0:
-            print('choice', 'i', i, 'j', j)
+            # print('choice', 'i', i, 'j', j)
             state = statess[i][j]
             states.append(state)
             t = timePoints[i]
@@ -406,9 +417,9 @@ class FingeringArranger:
             # print('matched', matched)
             # print('empty', empty)
             # print('missed', missed)
-            print(state.dump())
-            if missed:
-                print('missed', missed, 'at', t, i)
+            # print(state.dump())
+            # if missed:
+            #     print('missed', missed, 'at', t, i)
             for finger in range(N_FINGERS):
                 if not matched[finger]:
                     continue
@@ -427,9 +438,17 @@ class FingeringArranger:
                     fingering = event.note.fingering
                     fingering.fret = 0
                     fingering.string = r + 1
+            progress.current = nTimePoints - i
+
             j = choicess[i][j]
             i -= 1
         self.states =  states[::-1]
+        progress.info = 'Arranged.'
+        progress.total = progress.current = 1
+
+        # import pickle
+        # s = pickle.dumps((self.sheet, self))
+        # print('picle size', len(s))
 
     def _make_fretboard(self):
         fretboard = Fretboard()

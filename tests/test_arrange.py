@@ -5,13 +5,14 @@ import pysheetmusic
 from raygllib import ui
 
 from guitarist.arrange import FingeringArranger
+from guitarist.runner import Progress
 
 SHEETS = [
     # 'Debug.mxl',
+    'We_wish_you_a_Merry_Christmas.mxl',
     'Lute_Suite_No._1_in_E_Major_BWV_1006a_J.S._Bach.mxl',
     'Jeux_interdits.mxl',
     'K27_Domenico_Scarlatti.mxl',
-    'We_wish_you_a_Merry_Christmas.mxl',
     # 'Auld_Lang_Syne_guitar.mxl',
     # 'Allegretto_in_C_Major_for_Guitar_by_Carcassi_-_arr._by_Gerry_Busch.mxl',
     'Fernando_Sor_Op.32_Mazurka.mxl',
@@ -81,7 +82,8 @@ class TestArrange(unittest.TestCase):
             pysheetmusic.tab.attach_tab(sheet)
             pysheetmusic.tab.attach_fingerings(sheet)
             arranger = FingeringArranger(sheet)
-            arranger.arrange()
+            progress = Progress()
+            arranger.arrange(progress)
 
             window = Window()
             window.set_sheet(sheet)
