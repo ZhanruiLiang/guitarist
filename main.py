@@ -1,6 +1,8 @@
+import crash_on_ipy
 from guitarist.main import Window
 
-import crash_on_ipy
-window = Window(width=1366, height=768)
-window.load_sheet('/home/ray/python/pysheetmusic/tests/sheets/Auld_Lang_Syne_guitar.mxl')
+# window = Window(width=1366, height=768)
+window = Window(width=1366, height=600)
+window.load_sheet('/home/ray/python/pysheetmusic/tests/sheets/We_wish_you_a_Merry_Christmas.mxl')
+# window.load_sheet('/home/ray/python/pysheetmusic/tests/sheets/Debug.mxl')
 window.start()

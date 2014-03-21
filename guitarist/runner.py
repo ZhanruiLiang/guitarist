@@ -52,6 +52,8 @@ class Runner:
         self._proc = proc = Process(target=self._run_wrapper, args=args)
         self._thread = thread = Thread(target=self._wait, args=(conn_recv,))
 
+        proc.daemon = True
+        thread.daemon = True
         proc.start()
         thread.start()
 
@@ -86,4 +88,4 @@ class Runner:
         " A hook which will be call on finish normally. "
 
     def on_fail(self, exception):
-        print(exception, sys.stderr)
+        print(str(exception), file=sys.stderr)

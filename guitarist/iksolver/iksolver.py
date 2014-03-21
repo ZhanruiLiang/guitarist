@@ -7,7 +7,10 @@ import numpy as np
 # import pyximport; pyximport.install()
 # from ._iksolver import calc_jacobian_matrix
 
-__all__ = ['JointConfig', 'IKSolver', 'TargetUnreachable']
+__all__ = [
+    'JointConfig', 'IKSolver', 'TargetUnreachable',
+    'apply_angles',
+]
 
 class TargetUnreachable(Exception):
     pass
@@ -111,18 +114,20 @@ def _calc_spaces(configs):
         spaces[i, 0:3, 3] = config.position
     return spaces
 
-def _update_spaces(spaces, angles):
-    " Update spaces by angles. Inplace operation. "
+def apply_angles(spaces, angles):
+    " Update spaces by angles. "
     n = len(angles)
     cos = np.cos(angles)
     sin = np.sin(angles)
     R = np.zeros((4, n), dtype=np.double)
     R[0] = R[3] = cos; R[1] = -sin; R[2] = sin
     R = R.T.reshape((n, 2, 2))
+    spaces = spaces.copy()
     # spaces[:, 0:3, (0, 1)] = spaces[:, 0:3, (0, 1)].dot(R)
     for i in range(len(angles)):
         slice_ = (i, slice(0, 3), slice(0, 2))
         spaces[slice_] = spaces[slice_].dot(R[i])
+    return spaces
 
 
 class IKSolver:
@@ -139,11 +144,11 @@ class IKSolver:
         self._parent_id = [
             self._name_to_id.get(config.parent_name, None) for config in configs]
         self._is_ancestor_of = _calc_relation_matrix(configs)
-        # Current joint positions.
-        self._spaces_init = _calc_spaces(configs)
-        self._spaces = self._spaces_init.copy()
         # Current joint angles.
         self._angles = np.array([0 for config in configs], dtype=np.double)
+        # Current joint positions.
+        self._spaces_init = _calc_spaces(configs)
+        self._update_spaces()
         # Each item of _targets is a (joint_id, joint_pos) tuple.
         self._targets = []
         # Will be initialize after calling _prepare_targets. Both _target_positions 
@@ -182,12 +187,6 @@ class IKSolver:
         )
         self._constraints.append(constraint)
 
-    def clear_constraints(self):
-        self._constraints.clear()
-
-    def clear_targets(self):
-        self._targets.clear()
-
     def set_target_pos(self, joint_id, pos):
         self._targets.append((joint_id, pos))
 
@@ -200,8 +199,12 @@ class IKSolver:
         self._prepare_targets()
         self._prepare_constraints()
 
+        if len(self._target_positions) == 0:
+            return
+
+        ENABLE_LOW = True
         STEP_LENGTH = 0.2 * self.n_joints
-        DAMPING = 5
+        DAMPING = 10
 
         # Error between target and current position
         error = STOP_THRESHOLD + 1
@@ -211,7 +214,7 @@ class IKSolver:
                 np.alltrue(error_low < STOP_THRESHOLD_LOW)):
             # print('<<<<<<<<<<<<<<<<<< new iter<<<<<<<<<<<<<<<<<<<<<', iter_count) 
             error = self._clamp_error(self._target_positions - self._positions)
-            # print(error, self._target_positions, self._positions)
+            # print('error', error)
             # Calculate delta angle.
             J = self._calc_jacobian_matrix()
             # J = calc_jacobian_matrix(self)
@@ -221,31 +224,43 @@ class IKSolver:
             angle_step = _length(delta_angle)
             if angle_step > STEP_LENGTH:
                 delta_angle *= STEP_LENGTH / angle_step
-            T = np.eye(Jp.shape[0]) - dot(Jp, J)
-            # Some constraint may be resolved so that they will not be included
-            # in constraint_ids.
-            error_low, constraint_ids = self._calc_error_low()
-            if constraint_ids:
-                JL = self._calc_jacobian_matrix_low(constraint_ids)
-                d_error_low = error_low - dot(JL, delta_angle)
-                # Some magic math operations.
-                S = dot(JL, T)
-                W = dot(S, S.T) + DAMPING * np.eye(S.shape[0])
-                y = dot(S.T, np.linalg.solve(W, d_error_low))
-                delta_angle += dot(T, y)
+            if ENABLE_LOW:
+                T = np.eye(Jp.shape[0]) - dot(Jp, J)
+                # Some constraint may be resolved so that they will not be included
+                # in constraint_ids.
+                error_low, constraint_ids = self._calc_error_low()
+                # print('error_low', error_low)
+                # print(len(error_low), len(constraint_ids), constraint_ids)
+                # for constraint_id in constraint_ids:
+                #     constraint = self._constraints[constraint_id]
+                #     print(self.configs[constraint.joint_id].name, self._constraints[constraint_id], self._angles[constraint.joint_id])
+                if constraint_ids:
+                    JL = self._calc_jacobian_matrix_low(constraint_ids)
+                    d_error_low = error_low - dot(JL, delta_angle)
+                    # Some magic math operations.
+                    S = dot(JL, T)
+                    W = dot(S, S.T) + DAMPING * np.eye(S.shape[0])
+                    y = dot(S.T, np.linalg.solve(W, d_error_low))
+                    delta_angle += dot(T, y)
 
-            # Clamp step
-            angle_step = _length(delta_angle)
-            if angle_step > STEP_LENGTH:
-                delta_angle *= STEP_LENGTH / angle_step
+                # Clamp step
+                angle_step = _length(delta_angle)
+                if angle_step > STEP_LENGTH:
+                    delta_angle *= STEP_LENGTH / angle_step
+            else:
+                error_low = 0
             self._angles += delta_angle
             self._update_spaces()
             self._update_positions()
             # self._dump_state()
             iter_count += 1
-            if iter_count >= max_iteration:
+            if iter_count > max_iteration:
                 raise TargetUnreachable()
         print('iter_count', iter_count)
+
+    def clear(self):
+        self._targets.clear()
+        self._constraints.clear()
 
     def _clamp_error(self, error):
         for i in range(0, self.n_targets * 3, 3):
@@ -260,6 +275,16 @@ class IKSolver:
 
     def get_angle_by_name(self, joint_name):
         return self._angles[self._name_to_id[joint_name]]
+
+    def get_global_matrix(self, joint_id):
+        return self._spaces[joint_id]
+
+    def get_global_matrix_by_name(self, joint_name):
+        return self._spaces[self._name_to_id[joint_name]]
+
+    def get_init_spaces(self):
+        " return: Initial local space matrices for each joint. "
+        return self._spaces_init.copy()
 
     def _calc_jacobian_matrix(self):
         """
@@ -292,13 +317,11 @@ class IKSolver:
             Position reference
 
         The return result is the low priority (constraint) Jacobian matrix.
+        JL(i, j) = Deriv(metric[i], angle(j))
         """
         m = sum(self._constraints[i].size for i in constraint_ids)
         n = self.n_joints
         JL = np.zeros((m, n), dtype=np.double)
-        start = 0
-        angles = self._angles
-        positions = self._positions
         i = 0
         get_joint_pos = self._get_joint_global_pos3
         for id in constraint_ids:
@@ -343,14 +366,15 @@ class IKSolver:
                     error_low.append(c.weight * DAMPING * (ref_angle - angle))
                     constraint_ids.append(i)
             elif c.type == ConstraintType.POS_REF:
-                pos = self._positions[3 * c.joint_id:3 * c.joint_id + 3]
+                # pos = self._positions[3 * c.joint_id:3 * c.joint_id + 3]
+                pos = self._spaces[c.joint_id, 0:3, 3]
                 ref_pos = c.args
                 d = ref_pos - pos
                 d_len = _length(d)
                 if d_len > REF_POS_MIN_DISTANCE:
                     if d_len > REF_POS_CLAMP:
                         d *= REF_POS_CLAMP / d_len
-                    error_low.extends(d)
+                    error_low.extend(d)
                     constraint_ids.append(i)
         error_low = np.array(error_low, dtype=np.double)
         return error_low, constraint_ids
@@ -364,8 +388,7 @@ class IKSolver:
 
     def _update_spaces(self):
         " Update joint positions after some joints' angle changed. "
-        self._spaces = spaces = self._spaces_init.copy()
-        _update_spaces(spaces, self._angles)
+        self._spaces = spaces = apply_angles(self._spaces_init, self._angles)
         for i in range(self.n_joints):
             if self._parent_id[i] is not None:
                 spaces[i] = spaces[self._parent_id[i]].dot(spaces[i])
@@ -410,3 +433,170 @@ class IKSolver:
                         args=(config.min_angle, config.max_angle),
                     ))
                     break
+
+def normalized(a):
+    d = np.dot(a, a) ** .5
+    return a / (d if d != 0 else 1)
+
+def rotate(axis, pos, angle):
+    n = normalized(axis[:3])
+    I3 = np.eye(3, dtype=np.double)
+    T = np.array([
+        (0, -n[2], n[1]),
+        (n[2], 0, -n[0]),
+        (-n[1], n[0], 0),
+    ], dtype=np.double)
+    c = np.cos(angle)
+    R = (c * I3 + (1 - c) * np.outer(n, n)) + np.sin(angle) * T
+    mat = np.eye(4, dtype=np.double)
+    mat[0:3, 0:3] = R
+    mat[0:3, 3] = (I3 - R).dot(pos[:3])
+    return mat
+
+
+class ConstraintArc:
+    def __init__(self, pos, min_angle, max_angle):
+        px, py, pz = pos
+        c1 = np.cos(min_angle); s1 = np.sin(min_angle)
+        c2 = np.cos(max_angle); s2 = np.sin(max_angle)
+        self.start_pos = np.array([px * c1 - py * s1, px * s1 + py * c1, pz])
+        self.end_pos = np.array([px * c2 - py * s2, px * s2 + py * c2, pz])
+        self.norm1 = np.array([px * (-s1) - py * c1, px * c1 + py * (-s1), 0])
+        self.norm2 = np.array([px * s2 - py * (-c2), px * (-c2) + py * s2, 0])
+        self.pos = pos
+        self.length_xy = np.sqrt(px * px + py * py)
+
+    def closest(self, pos):
+        if _length(pos) < 1e-8:
+            return self.pos.copy()
+        side1 = self.norm1.dot(pos)
+        if side1 < 0:
+            return self.start_pos.copy()
+        side2 = self.norm2.dot(pos)
+        if side2 < 0:
+            return self.end_pos.copy()
+        px, py = pos[0:2]
+        pz = self.pos[2]
+        length_xy = np.sqrt(px * px + py * py)
+        k = self.length_xy / length_xy
+        return np.array([px * k, py * k, pz])
+
+    def closest_angle(self, pos):
+        pass
+
+
+class FABRIKSolver(IKSolver):
+
+    def __init__(self, configs):
+        super().__init__(configs)
+        self._min_angles = [joint_config.min_angle for joint_config in self.configs]
+        self._max_angles = [joint_config.max_angle for joint_config in self.configs]
+        self._spaces_init_inv = self._spaces_init.copy()
+        for i in range(self.n_joints):
+            self._spaces_init_inv[i] = np.linalg.inv(self._spaces_init_inv[i])
+        self._parent_ids = [
+            (self._name_to_id.get(jonit_config.parent_name, -1)) 
+            for joint_config in self.configs
+        ]
+        self._children = [[] for i in range(self.n_joints)]
+        for i in range(self.n_joints):
+            if self._parent_ids[i] >= 0:
+                self._children[self._parent_ids[i]].append(i)
+
+
+    def solve(self, max_iteration=500):
+        self._update_spaces()
+
+        if len(self._target_positions) == 0:
+            return
+
+        STOP_THRESHOLD = .002
+        D_STOP_THRESHOLD = 1e-5
+
+        target_positions = np.zeros((len(self._targets), 3), dtype=np.double)
+        joint_targets = [None] * self.n_joints
+        for i, (joint_id, target_pos) in enumerate(self._targets):
+            target_positions[i] = target_pos
+            joint_targets[joint_id] = target_pos
+        target_selector = np.array([joint_id for joint_id, _ in self._targets])
+        last_positions = self._spaces[:, 0:3, 3]
+        spaces_init = self._spaces_init
+        spaces_init_inv = self._spaces_init_inv
+
+        backward_arcs =[ConstraintArc(
+            spaces_init_inv[j, 0:3, 3], -configs[j].max_angle, -configs[j].min_angle
+        ) for j in range(self.n_joints)]
+
+        forward_arcs = [ConstraintArc(
+            spaces_init[j, 0:3, 3], -configs[j].max_angle, -configs[j].min_angle,.
+        ) for j in range(self.n_joints)]
+
+        for iter_count in range(max_iteration):
+            error = last_positions[target_selector] - self.target_positions
+            if np.alltrue(error < STOP_THRESHOLD):
+                break
+            for joint_id, target_pos in self._targets:
+                self._spaces[joint_id, 0:3, 3] = target_pos
+                self._spaces[joint_id, 3, 3] = 1.
+            # Backward phase
+            for i in reversed(range(self.n_joints)):
+                pos4 = self._spaces[i, :, 3]
+                new_poss = []
+                if joint_targets[i] is not None:
+                    new_poss.append(joint_targets[i])
+                # collect all target position and take centroid
+                for j in self._children[i]:
+                    child_global_matrix = self._spaces[j]
+                    # current joint i position relative to child j.
+                    pos_rel_child = np.linalg.solve(child_global_matrix, pos4)[:3]
+                    new_pos = child_global_matrix.dot(
+                        np.hstack([backward_arcs[j].closest(pos_rel_child), 1]))
+                    new_poss.append(new_pos)
+                if new_poss:
+                    new_pos = np.average(new_poss, 0)
+                    self._drag_to(i, new_pos)
+
+            # Forward phase
+            self._spaces[0, :] = spaces_init[0, :]
+            for i in range(self.n_joints):
+                angles = []
+                parent_id = self._parent_ids[i]
+                if parent_id >= 0:
+                    global_matrix = self._spaces[parent_id].dot(spaces_init[i])
+                else:
+                    global_matrix = spaces_init[i]
+                global_matrix_inv = np.linalg.inv(global_matrix)
+                for j in self._children[i]:
+                    child_rel_pos4 = global_matrix_inv.dot(self._spaces[j, :, 3])
+                    angles.append(-forward_arcs[i].closest_angle(child_rel_pos4[:3]))
+                if angles:
+                    angle = np.average(angles)
+                    cos = np.cos(angle)
+                    sin = np.sin(angle)
+                    self._spaces[i] = global_matrix.dot([[cos, -sin], [sin, cos]])
+                else:
+                    angle = 0.
+                    self._spaces[i] = global_matrix
+                self._angles[i] = angle
+
+            positions = self._spaces[:, 0:3, 3]
+            if np.alltrue(positions - last_positions < D_STOP_THRESHOLD):
+                raise TargetUnreachable('System went static')
+            last_positions = positions
+        else:
+            raise TargetUnreachable('Max iteration exceeded.')
+
+    def _drag_to(self, joint_id, new_pos):
+        parent_id = self._parent_ids[joint_id]
+        if parent_id >= 0:
+            parent_pos = self._spaces[parent_id, 0:3, 3]
+            pos = self._spaces[joint_id, 0:3, 3]
+            arm1 = pos - parent_pos
+            arm2 = new_pos - parent_pos
+            axis = np.cross(arm1, arm2)
+            if _length(axis) > 1e-8:
+                angle = np.arcsin(
+                    _length(axis) / (_length(arm1) * _length(arm2)))
+                R4 = rotate(axis, parent_pos, angle)
+                self._spaces[joint_id] = R4.dot(self._spaces[joint_id])
+        self._spaces[joint_id, 0:3, 3] = new_pos

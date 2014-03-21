@@ -288,6 +288,7 @@ class FingeringArranger:
     noteEvents
     time_points
     states
+    fretboard
     """
     def __init__(self, sheet):
         self.sheet = sheet
@@ -505,7 +506,7 @@ class Fretboard:
     BOTTOM = .10
     STRING_LENGTH = .90
 
-    def __init__(self, maxFret=18, tuning='standard'):
+    def __init__(self, maxFret=17, tuning='standard'):
         self.basePitches = [pitch_to_level2(*args) for args in self.TUNING[tuning]]
         self.minPitch = minPitch = self.basePitches[-1]
         self.maxPitch = maxPitch = self.basePitches[0] + maxFret

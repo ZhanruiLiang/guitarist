@@ -1,6 +1,7 @@
 import os
 import threading
 
+from scipy.interpolate import interp1d
 from raygllib import ui
 import raygllib
 import raygllib.model
@@ -179,17 +180,17 @@ class Window(ui.Window):
                 arranger.arrange(progress)
                 layout = pysheetmusic.layout.LinearTabLayout(sheet)
                 layout.layout()
-                return sheet, arranger, layout
+                return sheet, layout, arranger
 
             def on_finish(self, result):
-                sheet, arranger, layout = result
+                sheet, layout, arranger = result
                 with window._updateLock:
                     if window.sheet is not None:
                         window._sheet_to_free.append(window.sheet)
                     window.sheet = sheet
+                    window.performer.set_sheet(sheet, arranger)
                     window.player.set_sheet(sheet)
                     window.sheet_viewer.set_sheet_layout(layout)
-                    window.performer.set_sheet(sheet, arranger)
                 window.play()
         with self._updateLock:
             self.set_runner(LoadSheetRunner(self._sheet_parser, path))
