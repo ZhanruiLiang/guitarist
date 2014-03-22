@@ -1,6 +1,8 @@
 import unittest
 import numpy as np
 import os
+
+import pyglet
 from raygllib.utils import timeit_context
 
 from guitarist.iksolver import JointConfig, IKSolver, TargetUnreachable
@@ -10,6 +12,7 @@ def get_resource_path(*sub_paths):
     return os.path.join(os.path.dirname(__file__), *sub_paths)
 
 class TestIKSolver(unittest.TestCase):
+    IKSolverClass = IKSolver
     def test_solve_3_joints(self):
         configs = [
             # parent_name, name, position, orient, axis, min_angle, max_angle, range_weight
@@ -20,7 +23,7 @@ class TestIKSolver(unittest.TestCase):
             JointConfig(
                 'joint-2', 'joint-3', (0, 2, 0), (0, 1, 0), (0, 0, 1), 0., np.pi/2, 1.),
         ]
-        solver = IKSolver(configs)
+        solver = self.IKSolverClass(configs)
         joint2_id = solver.get_joint_id('joint-2')
         joint3_id = solver.get_joint_id('joint-3')
         solver.set_target_pos(joint3_id, (2, 2, 0))
@@ -45,7 +48,7 @@ class TestIKSolver(unittest.TestCase):
             JointConfig(
                 'joint-4', 'joint-5', (0, 0, 2), (0, 0, 1), (0, -1, 1), 0., np.pi/2, 1.),
         ]
-        solver = IKSolver(configs)
+        solver = self.IKSolverClass(configs)
         solver.set_target_pos(solver.get_joint_id('joint-3'), (2, 2, 0))
         solver.set_target_pos(solver.get_joint_id('joint-5'), (0, 2, -2))
         with timeit_context('solve'):
@@ -97,10 +100,48 @@ class TestIKSolver(unittest.TestCase):
         controller1 = Controller(window.scene, 'pipe-1')
         target = window.scene.get_model('Icosphere')
         targetPos = target.matrix[0:3, 3] / target.matrix[3, 3]
-        print(target.matrix)
         controller1.solver.set_target_pos_by_name('joint-3', targetPos)
-        controller1.solver.solve()
-        controller1.update_model_joints()
+        gen = controller1.solver.solve()
+        def step(dt):
+            try:
+                next(gen)
+            except (StopIteration, TargetUnreachable) as e:
+                pyglet.clock.unschedule(step)
+                print(e)
+            controller1.update_model_joints()
+        pyglet.clock.schedule_interval(step, .1)
+        # window.add_controller(controller1)
+        window.start()
+
+    def test_controller_Y(self):
+        window = IKViewer()
+        window.load_scene(get_resource_path('models', 'segments-y.dae'))
+        pi = np.pi
+        angle_ranges = {
+            'joint-0': (0, pi / 2),
+            'joint-1': (0, pi / 2),
+            'joint-l-0': (0, pi / 2), 'joint-l-1': (0, pi / 2),
+            'joint-r-0': (0, pi / 2), 'joint-r-1': (0, pi / 2),
+        }
+        controller1 = Controller(window.scene, 'Cube', angle_ranges)
+
+        target = window.scene.get_model('Icosphere')
+        targetPos = target.matrix[0:3, 3] / target.matrix[3, 3]
+        controller1.solver.set_target_pos_by_name('joint-l-2', targetPos)
+
+        target = window.scene.get_model('Icosphere_001')
+        targetPos = target.matrix[0:3, 3] / target.matrix[3, 3]
+        controller1.solver.set_target_pos_by_name('joint-r-2', targetPos)
+
+        gen = controller1.solver.solve()
+        def step(dt):
+            try:
+                next(gen)
+            except (StopIteration, TargetUnreachable) as e:
+                pyglet.clock.unschedule(step)
+                print(e)
+            controller1.update_model_joints()
+        pyglet.clock.schedule_interval(step, .1)
         # window.add_controller(controller1)
         window.start()
 
@@ -113,11 +154,17 @@ class TestIKSolver(unittest.TestCase):
         target = window.scene.get_model('target')
         targetPos = target.matrix[0:3, 3] / target.matrix[3, 3]
         controller1.solver.set_target_pos_by_name('tip', targetPos)
-        try:
-            controller1.solver.solve()
-        except TargetUnreachable:
-            pass
-        controller1.update_model_joints()
+        # with timeit_context('solve'):
+        gen = controller1.solver.solve()
+        def step(dt):
+            try:
+                next(gen)
+            except (StopIteration, TargetUnreachable) as e:
+                pyglet.clock.unschedule(step)
+                print(e)
+            controller1.update_model_joints()
+            print(dt)
+        pyglet.clock.schedule_interval(step, 0.2)
         # window.add_controller(controller1)
         window.start()
 
@@ -155,15 +202,22 @@ class TestIKSolver(unittest.TestCase):
         targetPos = target.matrix[0:3, 3] / target.matrix[3, 3]
         controller1.solver.set_target_pos_by_name(
             'finger_0_tip', targetPos)
-        try:
-            with timeit_context('solve'):
-                controller1.solver.solve()
-        except TargetUnreachable:
-            pass
-        controller1.update_model_joints()
+        gen = controller1.solver.solve()
+        def step(dt):
+            try:
+                next(gen)
+            except (StopIteration, TargetUnreachable) as e:
+                pyglet.clock.unschedule(step)
+                print(e)
+            controller1.update_model_joints()
+            print(dt)
+        pyglet.clock.schedule_interval(step, 0.02)
         # window.add_controller(controller1)
         window.start()
 
 if __name__ == '__main__':
     import crash_on_ipy
     TestIKSolver().test_controller_hand()
+    # TestIKSolver().test_controller_Y()
+    # TestIKSolver().test_controller_long()
+    # TestIKSolver().test_controller()

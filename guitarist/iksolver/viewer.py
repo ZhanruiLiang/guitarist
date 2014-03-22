@@ -1,7 +1,7 @@
 from raygllib import ui
 from raygllib.viewer import Viewer
 from raygllib.model import Scene
-from . import JointConfig, IKSolver
+from . import JointConfig, IKSolver, FABRIKSolver
 import numpy as np
 
 __all__ = ['Controller', 'IKViewer']
@@ -25,13 +25,18 @@ class Controller:
                     if joint.name in angle_ranges else pi,
                 range_weight = 1.,
             ))
-        self.solver = IKSolver(joint_configs)
+        # self.solver = IKSolver(joint_configs)
+        self.solver = FABRIKSolver(joint_configs)
         self.joints = armatured_model.joints
 
     def update_model_joints(self):
         solver = self.solver
         for joint in self.joints:
             joint.angle = solver.get_angle_by_name(joint.name)
+            joint.matrix = solver.get_global_matrix_by_name(joint.name)
+        for joint in reversed(self.joints):
+            if joint.parent:
+                joint.matrix = np.linalg.solve(joint.parent.matrix, joint.matrix)
 
 
 class IKViewer(Viewer):

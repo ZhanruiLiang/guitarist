@@ -1,7 +1,10 @@
+from fractions import Fraction
+
 import numpy as np
 from scipy.interpolate import interp1d
-from .iksolver import JointConfig, IKSolver, TargetUnreachable, apply_angles
-from fractions import Fraction
+from raygllib.utils import timeit_context
+
+from .iksolver import JointConfig, IKSolver, FABRIKSolver, TargetUnreachable, apply_angles
 
 __all__ = ['Performer']
 
@@ -137,7 +140,8 @@ class Hand:
         root_joint = next(joint for joint in model.joints if joint.parent is None)
         build_subjoints(root_joint, None, np.eye(4, dtype=np.double))
 
-        self.solver = IKSolver(joint_configs)
+        self.solver = FABRIKSolver(joint_configs)
+        # self.solver = IKSolver(joint_configs)
         # Get id for each subjoint
         for subjoints1 in subjoints.values():
             for subjoint in subjoints1:
@@ -212,10 +216,11 @@ class Hand:
             #     self.scene.get_empty_node_pos('elbow_left')
             # )
             # Solver for all subjoint angles.
-            try:
-                solver.solve(max_iteration=30)
-            except TargetUnreachable:
-                pass
+            with timeit_context('solve'):
+                try:
+                    solver.solve(max_iteration=30)
+                except TargetUnreachable:
+                    pass
                 # solver._dump_state()
                 # raise
             # Store the angles for later interpolation.

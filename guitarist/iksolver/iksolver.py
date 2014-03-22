@@ -8,7 +8,7 @@ import numpy as np
 # from ._iksolver import calc_jacobian_matrix
 
 __all__ = [
-    'JointConfig', 'IKSolver', 'TargetUnreachable',
+    'JointConfig', 'IKSolver', 'TargetUnreachable', 'FABRIKSolver',
     'apply_angles',
 ]
 
@@ -457,32 +457,47 @@ def rotate(axis, pos, angle):
 class ConstraintArc:
     def __init__(self, pos, min_angle, max_angle):
         px, py, pz = pos
-        c1 = np.cos(min_angle); s1 = np.sin(min_angle)
-        c2 = np.cos(max_angle); s2 = np.sin(max_angle)
+        c1 = np.cos(min_angle)
+        s1 = np.sin(min_angle)
+        c2 = np.cos(max_angle)
+        s2 = np.sin(max_angle)
+        self.min_angle = min_angle
+        self.max_angle = max_angle
         self.start_pos = np.array([px * c1 - py * s1, px * s1 + py * c1, pz])
         self.end_pos = np.array([px * c2 - py * s2, px * s2 + py * c2, pz])
-        self.norm1 = np.array([px * (-s1) - py * c1, px * c1 + py * (-s1), 0])
-        self.norm2 = np.array([px * s2 - py * (-c2), px * (-c2) + py * s2, 0])
+        # self.norm1 = np.array([px * (-s1) - py * c1, px * c1 + py * (-s1), 0])
+        # self.norm2 = np.array([px * s2 - py * (-c2), px * (-c2) + py * s2, 0])
         self.pos = pos
         self.length_xy = np.sqrt(px * px + py * py)
 
     def closest(self, pos):
-        if _length(pos) < 1e-8:
-            return self.pos.copy()
-        side1 = self.norm1.dot(pos)
-        if side1 < 0:
-            return self.start_pos.copy()
-        side2 = self.norm2.dot(pos)
-        if side2 < 0:
-            return self.end_pos.copy()
+        # import pdb; pdb.set_trace()
         px, py = pos[0:2]
-        pz = self.pos[2]
         length_xy = np.sqrt(px * px + py * py)
+        if self.length_xy < 1e-8 or length_xy < 1e-8:
+            return self.pos.copy()
+        px0, py0, pz0 = self.pos
+        rel_angle = np.arccos(
+            np.clip((px0 * px + py0 * py) / self.length_xy / length_xy, -1, 1))
+        if px0 * py - py0 * px < 0:
+            rel_angle *= -1
+        if rel_angle < self.min_angle:
+            return self.start_pos
+        if rel_angle > self.max_angle:
+            return self.end_pos
         k = self.length_xy / length_xy
-        return np.array([px * k, py * k, pz])
+        return np.array([px * k, py * k, pz0])
 
     def closest_angle(self, pos):
-        pass
+        px, py = pos[0:2]
+        length_xy = np.sqrt(px * px + py * py)
+        if self.length_xy < 1e-8 or length_xy < 1e-8:
+            return (self.min_angle + self.max_angle) / 2
+        px0, py0, pz0 = self.pos
+        rel_angle = np.arccos((px0 * px + py0 * py) / self.length_xy / length_xy)
+        if px0 * py - py0 * px < 0:
+            rel_angle *= -1
+        return np.clip(rel_angle, self.min_angle, self.max_angle)
 
 
 class FABRIKSolver(IKSolver):
@@ -495,7 +510,7 @@ class FABRIKSolver(IKSolver):
         for i in range(self.n_joints):
             self._spaces_init_inv[i] = np.linalg.inv(self._spaces_init_inv[i])
         self._parent_ids = [
-            (self._name_to_id.get(jonit_config.parent_name, -1)) 
+            self._name_to_id.get(joint_config.parent_name, -1)
             for joint_config in self.configs
         ]
         self._children = [[] for i in range(self.n_joints)]
@@ -504,13 +519,13 @@ class FABRIKSolver(IKSolver):
                 self._children[self._parent_ids[i]].append(i)
 
 
+    # @profile
     def solve(self, max_iteration=500):
-        self._update_spaces()
-
-        if len(self._target_positions) == 0:
+        if len(self._targets) == 0:
             return
 
         STOP_THRESHOLD = .002
+        ERROR_CLAMP_DISTANCE = 0.02
         D_STOP_THRESHOLD = 1e-5
 
         target_positions = np.zeros((len(self._targets), 3), dtype=np.double)
@@ -519,45 +534,62 @@ class FABRIKSolver(IKSolver):
             target_positions[i] = target_pos
             joint_targets[joint_id] = target_pos
         target_selector = np.array([joint_id for joint_id, _ in self._targets])
-        last_positions = self._spaces[:, 0:3, 3]
+        last_positions = self._spaces[:, 0:3, 3].copy()
         spaces_init = self._spaces_init
         spaces_init_inv = self._spaces_init_inv
 
+        configs = self.configs
         backward_arcs =[ConstraintArc(
-            spaces_init_inv[j, 0:3, 3], -configs[j].max_angle, -configs[j].min_angle
+            spaces_init_inv[j, 0:3, 3],
+            - configs[j].max_angle,
+            - configs[j].min_angle,
         ) for j in range(self.n_joints)]
 
-        forward_arcs = [ConstraintArc(
-            spaces_init[j, 0:3, 3], -configs[j].max_angle, -configs[j].min_angle,.
-        ) for j in range(self.n_joints)]
+        forward_arcs = {}
+        for i in range(self.n_joints):
+            for j in self._children[i]:
+                forward_arcs[i, j] = ConstraintArc(
+                    spaces_init[j, 0:3, 3],
+                    configs[i].min_angle,
+                    configs[i].max_angle,
+                )
 
         for iter_count in range(max_iteration):
-            error = last_positions[target_selector] - self.target_positions
+            error = np.absolute(last_positions[target_selector] - target_positions)
+            # print('=====iter {}========================='.format(iter_count))
+            # print('error', error)
+            # print('last_positions', last_positions)
+            # print('target_positions', target_positions)
             if np.alltrue(error < STOP_THRESHOLD):
+                print('iter_count', iter_count)
                 break
-            for joint_id, target_pos in self._targets:
-                self._spaces[joint_id, 0:3, 3] = target_pos
-                self._spaces[joint_id, 3, 3] = 1.
             # Backward phase
             for i in reversed(range(self.n_joints)):
                 pos4 = self._spaces[i, :, 3]
                 new_poss = []
                 if joint_targets[i] is not None:
-                    new_poss.append(joint_targets[i])
+                    dpos = joint_targets[i] - pos4[:3]
+                    if _length(dpos) > ERROR_CLAMP_DISTANCE:
+                        dpos *= ERROR_CLAMP_DISTANCE / _length(dpos)
+                    new_poss.append(pos4[:3] + dpos)
                 # collect all target position and take centroid
                 for j in self._children[i]:
                     child_global_matrix = self._spaces[j]
                     # current joint i position relative to child j.
-                    pos_rel_child = np.linalg.solve(child_global_matrix, pos4)[:3]
-                    new_pos = child_global_matrix.dot(
-                        np.hstack([backward_arcs[j].closest(pos_rel_child), 1]))
+                    # pos_rel_child = np.linalg.solve(child_global_matrix, pos4)[:3]
+                    # closest_rel_pos = backward_arcs[j].closest(pos_rel_child)
+                    # new_pos = child_global_matrix.dot(np.hstack([closest_rel_pos, 1]))[:3]
+                    new_pos = child_global_matrix.dot(spaces_init_inv[j, :, 3])[:3]
                     new_poss.append(new_pos)
+                # print('i', i, 'new_poss', new_poss)
                 if new_poss:
                     new_pos = np.average(new_poss, 0)
-                    self._drag_to(i, new_pos)
+                    # self._drag_to(i, new_pos)
+                    self._spaces[i, 0:3, 3] = new_pos
+                # print('i', i, 'space\n', (self._spaces[i]))
+                yield True
 
             # Forward phase
-            self._spaces[0, :] = spaces_init[0, :]
             for i in range(self.n_joints):
                 angles = []
                 parent_id = self._parent_ids[i]
@@ -567,22 +599,29 @@ class FABRIKSolver(IKSolver):
                     global_matrix = spaces_init[i]
                 global_matrix_inv = np.linalg.inv(global_matrix)
                 for j in self._children[i]:
-                    child_rel_pos4 = global_matrix_inv.dot(self._spaces[j, :, 3])
-                    angles.append(-forward_arcs[i].closest_angle(child_rel_pos4[:3]))
+                    child_rel_pos = global_matrix_inv.dot(self._spaces[j, :, 3])[:3]
+                    angles.append(forward_arcs[i, j].closest_angle(child_rel_pos))
                 if angles:
                     angle = np.average(angles)
                     cos = np.cos(angle)
                     sin = np.sin(angle)
-                    self._spaces[i] = global_matrix.dot([[cos, -sin], [sin, cos]])
+                    self._spaces[i] = global_matrix
+                    self._spaces[i, 0:3, 0:2] = self._spaces[i, 0:3, 0:2].dot(
+                        [[cos, -sin], [sin, cos]])
                 else:
                     angle = 0.
                     self._spaces[i] = global_matrix
+                # for j in self._children[i]:
+                #     self._spaces[j] = self._spaces[i].dot(spaces_init[j])
                 self._angles[i] = angle
+                yield True
+                # print(i, self.configs[i].name, angle)
 
             positions = self._spaces[:, 0:3, 3]
-            if np.alltrue(positions - last_positions < D_STOP_THRESHOLD):
+            if np.alltrue(np.absolute(positions - last_positions) < D_STOP_THRESHOLD):
                 raise TargetUnreachable('System went static')
-            last_positions = positions
+            last_positions = positions.copy()
+            yield True
         else:
             raise TargetUnreachable('Max iteration exceeded.')
 
