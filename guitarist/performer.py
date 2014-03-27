@@ -140,8 +140,8 @@ class Hand:
         root_joint = next(joint for joint in model.joints if joint.parent is None)
         build_subjoints(root_joint, None, np.eye(4, dtype=np.double))
 
-        self.solver = FABRIKSolver(joint_configs)
-        # self.solver = IKSolver(joint_configs)
+        # self.solver = FABRIKSolver(joint_configs)
+        self.solver = IKSolver(joint_configs)
         # Get id for each subjoint
         for subjoints1 in subjoints.values():
             for subjoint in subjoints1:

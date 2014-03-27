@@ -587,7 +587,7 @@ class FABRIKSolver(IKSolver):
                     # self._drag_to(i, new_pos)
                     self._spaces[i, 0:3, 3] = new_pos
                 # print('i', i, 'space\n', (self._spaces[i]))
-                yield True
+                # yield True
 
             # Forward phase
             for i in range(self.n_joints):
@@ -614,14 +614,14 @@ class FABRIKSolver(IKSolver):
                 # for j in self._children[i]:
                 #     self._spaces[j] = self._spaces[i].dot(spaces_init[j])
                 self._angles[i] = angle
-                yield True
+                # yield True
                 # print(i, self.configs[i].name, angle)
 
             positions = self._spaces[:, 0:3, 3]
             if np.alltrue(np.absolute(positions - last_positions) < D_STOP_THRESHOLD):
                 raise TargetUnreachable('System went static')
             last_positions = positions.copy()
-            yield True
+            # yield True
         else:
             raise TargetUnreachable('Max iteration exceeded.')
 
